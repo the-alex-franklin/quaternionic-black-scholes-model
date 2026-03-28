@@ -7,7 +7,9 @@ import { assertAlmostEquals, assertEquals } from "@std/assert";
 import {
 	add,
 	conjugate,
+	exp,
 	inverse,
+	log,
 	multiply,
 	norm,
 	project,
@@ -119,4 +121,53 @@ Deno.test("q * inverse(q) = 1", () => {
 
 Deno.test("project returns real component", () => {
 	assertEquals(project(q1), 1);
+});
+
+// ---------------------------------------------------------------------------
+// exp
+// ---------------------------------------------------------------------------
+
+Deno.test("exp of zero = 1", () => {
+	qNear(exp({ t: 0, p: 0, f: 0, l: 0 }), { t: 1, p: 0, f: 0, l: 0 });
+});
+
+Deno.test("exp of real = scalar exponential", () => {
+	qNear(exp({ t: 1, p: 0, f: 0, l: 0 }), { t: Math.E, p: 0, f: 0, l: 0 });
+});
+
+Deno.test("exp(πi) = -1  (Euler for i)", () => {
+	// exp(0 + π·i) = cos π + i·sin π = -1
+	qNear(exp({ t: 0, p: Math.PI, f: 0, l: 0 }), { t: -1, p: 0, f: 0, l: 0 });
+});
+
+Deno.test("exp((π/2)·k) = k  (unit rotation about k)", () => {
+	qNear(exp({ t: 0, p: 0, f: 0, l: Math.PI / 2 }), { t: 0, p: 0, f: 0, l: 1 });
+});
+
+Deno.test("|exp(q)| = e^q.t", () => {
+	near(norm(exp(q1)), Math.exp(q1.t));
+	near(norm(exp(q2)), Math.exp(q2.t));
+});
+
+// ---------------------------------------------------------------------------
+// log
+// ---------------------------------------------------------------------------
+
+Deno.test("log of 1 = 0", () => {
+	qNear(log({ t: 1, p: 0, f: 0, l: 0 }), { t: 0, p: 0, f: 0, l: 0 });
+});
+
+Deno.test("log(e) = 1", () => {
+	qNear(log({ t: Math.E, p: 0, f: 0, l: 0 }), { t: 1, p: 0, f: 0, l: 0 });
+});
+
+Deno.test("exp(log(q)) ≈ q  (round-trip, pure-imaginary norm < π)", () => {
+	// Use a quaternion whose pure part has norm well inside (0, π)
+	const q: Quaternion = { t: 2, p: 0.4, f: 0.3, l: 0.1 };
+	qNear(exp(log(q)), q);
+});
+
+Deno.test("log(exp(q)) ≈ q  (round-trip, pure-imaginary norm < π)", () => {
+	const q: Quaternion = { t: 0.5, p: 0.2, f: -0.3, l: 0.1 };
+	qNear(log(exp(q)), q);
 });

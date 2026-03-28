@@ -121,3 +121,59 @@ export const inverse = (q: Quaternion): Quaternion => {
 
 /** Project onto real (time) axis — the market-observable scalar */
 export const project = (q: Quaternion): number => q.t;
+
+/**
+ * Quaternion exponential.
+ *
+ * For q = t + v (v = p·i + f·j + l·k):
+ *   exp(q) = eᵗ · (cos|v| + v̂·sin|v|)
+ *
+ * When |v| → 0 the sinc function (sin|v|/|v|) approaches 1,
+ * handled numerically to avoid division by zero.
+ */
+export const exp = (q: Quaternion): Quaternion => {
+	const et = Math.exp(q.t);
+	const vNormSq = q.p ** 2 + q.f ** 2 + q.l ** 2;
+	const vNorm = Math.sqrt(vNormSq);
+	const cosV = Math.cos(vNorm);
+	// sinc(|v|) = sin(|v|)/|v|, limit 1 as |v|→0
+	const sinc = vNorm < 1e-10 ? 1 - vNormSq / 6 : Math.sin(vNorm) / vNorm;
+	return {
+		t: et * cosV,
+		p: et * sinc * q.p,
+		f: et * sinc * q.f,
+		l: et * sinc * q.l,
+	};
+};
+
+/**
+ * Principal quaternion logarithm.
+ *
+ * For q = t + v:
+ *   log(q) = log|q| + v̂ · arccos(t / |q|)
+ *
+ * Requires |q| > 0. For approximately-real quaternions with t > 0,
+ * the angle θ/|v| approaches 1/|q| by L'Hôpital.
+ * Throws for the zero quaternion or a negative real (non-unique principal log).
+ */
+export const log = (q: Quaternion): Quaternion => {
+	const qNorm = norm(q);
+	if (qNorm === 0) throw new Error("Cannot take log of the zero quaternion");
+
+	const vNormSq = q.p ** 2 + q.f ** 2 + q.l ** 2;
+	const vNorm = Math.sqrt(vNormSq);
+
+	if (vNorm < 1e-15) {
+		if (q.t <= 0) throw new Error("Log of a negative real quaternion is not unique");
+		return { t: Math.log(qNorm), p: 0, f: 0, l: 0 };
+	}
+
+	// θ / |v|, where θ = arccos(t / |q|)
+	const thetaOverVNorm = Math.acos(Math.max(-1, Math.min(1, q.t / qNorm))) / vNorm;
+	return {
+		t: Math.log(qNorm),
+		p: thetaOverVNorm * q.p,
+		f: thetaOverVNorm * q.f,
+		l: thetaOverVNorm * q.l,
+	};
+};
