@@ -4,7 +4,7 @@
  */
 
 import { assertAlmostEquals, assertThrows } from "@std/assert";
-import { type BSParams, normalCDF, normalPDF, price, quatN } from "./bs-model.ts";
+import { type BSParams, greeks, impliedVol, normalCDF, normalPDF, price, quatN } from "./bs-model.ts";
 import type { Quaternion } from "./quaternion.ts";
 
 const near = (a: number, b: number, eps = 1e-6) => assertAlmostEquals(a, b, eps);
@@ -96,14 +96,8 @@ Deno.test("classical BS: d₁ = 0.35, d₂ = 0.15", () => {
 	near(d2.p, 0);
 	near(d2.f, 0);
 	near(d2.l, 0);
-	near(d1.l, 0);
-	near(d2.p, 0);
-	near(d2.f, 0);
-	near(d2.l, 0);
 });
-	near(call.p, 0);
-	near(call.f, 0);
-	near(call.l, 0);
+
 Deno.test("classical BS: call price ≈ 10.4506", () => {
 	const { call } = price(classic);
 	near(call.t, 10.4506, 1e-3);
@@ -144,7 +138,7 @@ Deno.test("deep OTM call approaches zero", () => {
 // ---------------------------------------------------------------------------
 // Quaternionic extension — non-zero imaginary inputs
 // ---------------------------------------------------------------------------
-	near(call.t, 10.4506, 1); // within $1
+
 Deno.test("funding-vol perturbation: real component stays near classical", () => {
 	// Adding a small funding-rate vol component (5%) shouldn't move the classical
 	// call price by more than a few ticks in the real dimension.
@@ -319,4 +313,73 @@ Deno.test("Greeks: quaternionic vega imaginary parts match spot imaginary × n(d
 Deno.test("Greeks: quaternionic gamma stays positive and real", () => {
 	const { gamma } = greeks(quatParams);
 	assertAlmostEquals(gamma > 0 ? 1 : 0, 1, 1e-10);
+});
+
+// ---------------------------------------------------------------------------
+// Implied vol inversion
+// ---------------------------------------------------------------------------
+
+Deno.test("impliedVol: round-trip recovers classical vol", () => {
+	// Price with σ=0.30, then invert
+	const params: BSParams = { ...classic, vol: { t: 0.30, p: 0, f: 0, l: 0 } };
+	const callPrice = price(params).call.t;
+	const iv = impliedVol(callPrice, { ...classic, vol: { t: 0.20, p: 0, f: 0, l: 0 } });
+	near(iv, 0.30, 1e-7);
+});
+
+Deno.test("impliedVol: round-trip from standard vol", () => {
+	const callPrice = price(classic).call.t;
+	const iv = impliedVol(callPrice, classic);
+	near(iv, 0.20, 1e-7);
+});
+
+Deno.test("impliedVol: round-trip with OTM option", () => {
+	const params: BSParams = {
+		spot: { t: 100, p: 0, f: 0, l: 0 },
+		strike: 110,
+		expiry: 0.5,
+		rate: 0.05,
+		vol: { t: 0.25, p: 0, f: 0, l: 0 },
+	};
+	const callPrice = price(params).call.t;
+	const iv = impliedVol(callPrice, { ...params, vol: { t: 0.20, p: 0, f: 0, l: 0 } });
+	near(iv, 0.25, 1e-7);
+});
+
+Deno.test("impliedVol: round-trip with ITM option", () => {
+	const params: BSParams = {
+		spot: { t: 100, p: 0, f: 0, l: 0 },
+		strike: 90,
+		expiry: 0.25,
+		rate: 0.02,
+		vol: { t: 0.35, p: 0, f: 0, l: 0 },
+	};
+	const callPrice = price(params).call.t;
+	const iv = impliedVol(callPrice, { ...params, vol: { t: 0.20, p: 0, f: 0, l: 0 } });
+	near(iv, 0.35, 1e-7);
+});
+
+Deno.test("impliedVol: imaginary vol components held fixed during inversion", () => {
+	// Only vol.t should move; vol.p/f/l stay as supplied
+	const params: BSParams = { ...classic, vol: { t: 0.30, p: 0.05, f: 0.02, l: 0 } };
+	const callPrice = price(params).call.t;
+	const seed: BSParams = { ...classic, vol: { t: 0.20, p: 0.05, f: 0.02, l: 0 } };
+	const iv = impliedVol(callPrice, seed);
+	near(iv, 0.30, 1e-6);
+});
+
+Deno.test("impliedVol: throws on price below intrinsic", () => {
+	assertThrows(
+		() => impliedVol(-1, classic),
+		Error,
+		"no-arbitrage",
+	);
+});
+
+Deno.test("impliedVol: throws on price above spot", () => {
+	assertThrows(
+		() => impliedVol(200, classic),
+		Error,
+		"no-arbitrage",
+	);
 });

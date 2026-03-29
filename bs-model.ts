@@ -280,3 +280,79 @@ export const greeks = (params: BSParams): BSGreeks => {
 		rho: { call: rhoCall, put: rhoPut },
 	};
 };
+
+// ---------------------------------------------------------------------------
+// Implied volatility inversion
+// ---------------------------------------------------------------------------
+
+export type ImpliedVolOptions = {
+	/**
+	 * Convergence tolerance on |C(σ) − marketPrice|.
+	 * Default: 1e-8.
+	 */
+	tol?: number;
+
+	/**
+	 * Maximum Newton-Raphson iterations.
+	 * Default: 100.
+	 */
+	maxIter?: number;
+};
+
+/**
+ * Implied volatility inversion via Newton-Raphson.
+ *
+ * Finds the real scalar σ* such that the real part of the quaternionic call
+ * price equals `marketPrice`, holding all imaginary vol components fixed at
+ * their values in `params.vol`.
+ *
+ * The initial guess is `params.vol.t`; pass a vol quaternion with a
+ * reasonable `.t` to seed the search (e.g. 0.2 for equity options).
+ *
+ * Returns the calibrated real vol σ*.  To reconstruct the full quaternionic
+ * vol use: `{ ...params.vol, t: impliedVol(...) }`.
+ *
+ * Throws if the market price lies outside the no-arbitrage bounds
+ * [max(S − K·e^{−rT}, 0), S] or if Newton-Raphson fails to converge.
+ */
+export const impliedVol = (
+	marketPrice: number,
+	params: BSParams,
+	opts: ImpliedVolOptions = {},
+): number => {
+	const { spot, strike, expiry: T, rate: r } = params;
+	const { tol = 1e-8, maxIter = 100 } = opts;
+
+	// No-arbitrage bounds on call price
+	const discount = Math.exp(-r * T);
+	const lowerBound = Math.max(spot.t - strike * discount, 0);
+	const upperBound = spot.t;
+	if (marketPrice < lowerBound - tol || marketPrice > upperBound + tol) {
+		throw new Error(
+			`impliedVol: market price ${marketPrice} outside no-arbitrage bounds [${
+				lowerBound.toFixed(4)
+			}, ${upperBound.toFixed(4)}]`,
+		);
+	}
+
+	// Newton-Raphson on vol.t, imaginary components held fixed
+	let sigma = params.vol.t;
+
+	for (let i = 0; i < maxIter; i++) {
+		const p: BSParams = { ...params, vol: { ...params.vol, t: sigma } };
+		const callPrice = price(p).call.t;
+		const vegaT = greeks(p).vega.t; // ∂call.t/∂σ
+
+		const error = callPrice - marketPrice;
+		if (Math.abs(error) < tol) return sigma;
+
+		if (Math.abs(vegaT) < 1e-14) {
+			throw new Error(`impliedVol: vega collapsed to zero at σ=${sigma}`);
+		}
+
+		// Newton step, clamped to keep σ positive
+		sigma = Math.max(sigma - error / vegaT, 1e-8);
+	}
+
+	throw new Error(`impliedVol: failed to converge after ${maxIter} iterations`);
+};
