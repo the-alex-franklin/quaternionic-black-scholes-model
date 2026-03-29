@@ -57,19 +57,36 @@ export const normalCDF = (x: number): number => {
 export const normalPDF = (x: number): number => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
 
 /**
- * First-order quaternionic extension of N(·).
+ * Second-order quaternionic extension of N(·).
  *
- * For q = q.t + Im(q):
- *   N_Q(q) ≈ N(q.t) + n(q.t) · Im(q)
+ * For q = q_t + v  (v = p·i + f·j + l·k, purely imaginary):
  *
- * The imaginary components of the result carry first-order sensitivities
- * of the cumulative probability to movements in the funding and liquidity
- * dimensions — they vanish when Im(q) = 0, recovering the scalar CDF.
+ *   N_Q(q) = [N(q_t) − N''(q_t)/2 · |v|²]
+ *           + [n(q_t) − N'''(q_t)/6 · |v|²] · v
+ *           + O(|v|⁴)
+ *
+ * Using N''(x) = −x·n(x)  and  N'''(x) = (x²−1)·n(x):
+ *
+ *   real part:       N(q_t) + x·n(x)/2 · |v|²
+ *   imaginary scale: n(x) · [1 − (x²−1)/6 · |v|²]
+ *
+ * Reduces exactly to the scalar CDF when Im(q) = 0.
+ * The first-order result is recovered when the |v|² correction terms are dropped.
  */
 export const quatN = (q: Quaternion): Quaternion => {
 	const n0 = normalCDF(q.t);
 	const n1 = normalPDF(q.t);
-	return { t: n0, p: n1 * q.p, f: n1 * q.f, l: n1 * q.l };
+	const vNormSq = q.p ** 2 + q.f ** 2 + q.l ** 2;
+	// Real correction: −N''(t)/2 · |v|² = (t·n(t)/2) · |v|²
+	const realCorrection = (q.t * n1 / 2) * vNormSq;
+	// Imaginary scale correction: −N'''(t)/6 · |v|² = −(t²−1)·n(t)/6 · |v|²
+	const imagScale = n1 * (1 - (q.t ** 2 - 1) / 6 * vNormSq);
+	return {
+		t: n0 + realCorrection,
+		p: imagScale * q.p,
+		f: imagScale * q.f,
+		l: imagScale * q.l,
+	};
 };
 
 // ---------------------------------------------------------------------------

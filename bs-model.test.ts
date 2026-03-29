@@ -59,13 +59,41 @@ Deno.test("quatN with zero imaginary part recovers scalar CDF", () => {
 	near(result.l, 0);
 });
 
-Deno.test("quatN imaginary parts scale with normalPDF", () => {
+// Second-order formula — verify real and imaginary parts against analytic expressions
+Deno.test("quatN second-order: real correction = x·n(x)/2·|v|²", () => {
 	const q: Quaternion = { t: 0.35, p: 0.1, f: 0.2, l: 0 };
 	const result = quatN(q);
-	near(result.t, normalCDF(0.35));
-	near(result.p, normalPDF(0.35) * 0.1);
-	near(result.f, normalPDF(0.35) * 0.2);
+	const vNormSq = 0.1 ** 2 + 0.2 ** 2;
+	const expected = normalCDF(0.35) + 0.35 * normalPDF(0.35) / 2 * vNormSq;
+	near(result.t, expected);
+});
+
+Deno.test("quatN second-order: imaginary scale = n(x)·[1 − (x²−1)/6·|v|²]", () => {
+	const q: Quaternion = { t: 0.35, p: 0.1, f: 0.2, l: 0 };
+	const result = quatN(q);
+	const vNormSq = 0.1 ** 2 + 0.2 ** 2;
+	const scale = normalPDF(0.35) * (1 - (0.35 ** 2 - 1) / 6 * vNormSq);
+	near(result.p, scale * 0.1);
+	near(result.f, scale * 0.2);
 	near(result.l, 0);
+});
+
+Deno.test("quatN second-order: small |v| matches first-order to O(|v|²)", () => {
+	// For tiny imaginary part, correction is O(|v|²) ≈ 0 and imaginary scale ≈ n(x)
+	const eps = 1e-4;
+	const q: Quaternion = { t: 0.5, p: eps, f: 0, l: 0 };
+	const result = quatN(q);
+	near(result.t, normalCDF(0.5), 1e-7);        // real correction O(eps²) ~ 1e-8
+	near(result.p, normalPDF(0.5) * eps, 1e-10); // imaginary correction O(eps³)
+});
+
+Deno.test("quatN second-order: large |v| diverges from first-order", () => {
+	// At |v|=1, the real correction (x·n(x)/2·|v|²) is non-trivial
+	const q: Quaternion = { t: 0.35, p: 1, f: 0, l: 0 };
+	const firstOrder = normalCDF(0.35); // what first-order gives for real part
+	const result = quatN(q);
+	// Real part should be noticeably different from the first-order value
+	assertAlmostEquals(Math.abs(result.t - firstOrder) > 1e-4 ? 1 : 0, 1, 1e-10);
 });
 
 // ---------------------------------------------------------------------------
