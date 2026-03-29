@@ -1,15 +1,19 @@
 /**
- * Market Data Layer — Yahoo Finance
+ * Market Data Layer — Polygon.io
  *
  * Fetches historical OHLCV prices and live options chains for SPY, SPX, AAPL
  * (or any ticker). All network I/O is isolated here; backtest.ts is pure.
  *
- * Require: --allow-net when running scripts that call these functions.
+ * Requires: POLYGON_API_KEY env var, --allow-net --allow-env when running.
  * Tests use fixture snapshots and do not call these functions directly.
  */
 
 import axios from "axios";
 import { z } from "zod";
+import { env } from "./env.ts";
+
+const apiKey = () => env.POLYGON_API_KEY;
+const BASE = "https://api.polygon.io";
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -32,7 +36,7 @@ export type OptionQuote = {
 	bid: number;
 	ask: number;
 	mid: number;
-	iv: number;                 // Yahoo's implied vol estimate (annualised)
+	iv: number;                 // Implied vol (annualised)
 	volume: number;
 	openInterest: number;
 	type: "call" | "put";
@@ -47,162 +51,205 @@ export type MarketSnapshot = {
 };
 
 // ---------------------------------------------------------------------------
-// Yahoo Finance — chart (historical prices)
+// Polygon — historical prices (v2/aggs)
 // ---------------------------------------------------------------------------
 
-const YahooQuoteZ = z.object({
-	open: z.array(z.number().nullable()),
-	high: z.array(z.number().nullable()),
-	low: z.array(z.number().nullable()),
-	close: z.array(z.number().nullable()),
-	volume: z.array(z.number().nullable()),
-});
-
-const YahooAdjCloseZ = z.object({
-	adjclose: z.array(z.number().nullable()),
-});
-
-const YahooChartResultZ = z.object({
-	timestamp: z.array(z.number()),
-	indicators: z.object({
-		quote: z.array(YahooQuoteZ),
-		adjclose: z.array(YahooAdjCloseZ).optional(),
-	}),
-});
-
-const YahooChartZ = z.object({
-	chart: z.object({
-		result: z.array(YahooChartResultZ),
-	}),
+const PolygonAggsZ = z.object({
+	results: z.array(z.object({
+		t: z.number(),
+		o: z.number(),
+		h: z.number(),
+		l: z.number(),
+		c: z.number(),
+		v: z.number(),
+	})).optional().default([]),
+	status: z.string(),
 });
 
 /**
  * Fetch daily OHLCV history for `ticker` between `from` and `to`.
- *
- * Requires Deno --allow-net flag.
  */
 export const fetchHistoricalPrices = async (
 	ticker: string,
 	from: Date,
 	to: Date,
 ): Promise<OHLCV[]> => {
-	const p1 = Math.floor(from.getTime() / 1000);
-	const p2 = Math.floor(to.getTime() / 1000);
-	const url =
-		`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?period1=${p1}&period2=${p2}&interval=1d&events=history`;
-
-	const res = await axios.get(url, {
-		headers: { "User-Agent": "Mozilla/5.0" },
-	});
-	const parsed = YahooChartZ.parse(res.data);
-	const result = parsed.chart.result[0];
-	if (!result) throw new Error(`No chart data for ${ticker}`);
-
-	const { timestamp, indicators } = result;
-	const quote = indicators.quote[0];
-	if (!quote) throw new Error(`No quote data for ${ticker}`);
-	const adjClose = indicators.adjclose?.[0]?.adjclose ?? null;
-
-	const bars: OHLCV[] = [];
-	for (let i = 0; i < timestamp.length; i++) {
-		const o = quote.open[i];
-		const h = quote.high[i];
-		const l = quote.low[i];
-		const c = quote.close[i];
-		const v = quote.volume[i];
-		const ac = adjClose ? (adjClose[i] ?? c) : c;
-		if (o == null || h == null || l == null || c == null || v == null) continue;
-		bars.push({
-			date: new Date((timestamp[i] as number) * 1000),
-			open: o,
-			high: h,
-			low: l,
-			close: c,
-			adjClose: ac ?? c,
-			volume: v,
-		});
-	}
-	return bars;
+	const fmt = (d: Date) => d.toISOString().slice(0, 10);
+	const url = `${BASE}/v2/aggs/ticker/${ticker}/range/1/day/${fmt(from)}/${fmt(to)}?adjusted=true&sort=asc&limit=5000&apiKey=${apiKey()}`;
+	const res = await axios.get(url);
+	const parsed = PolygonAggsZ.parse(res.data);
+	return parsed.results.map((r) => ({
+		date: new Date(r.t),
+		open: r.o,
+		high: r.h,
+		low: r.l,
+		close: r.c,
+		adjClose: r.c,
+		volume: r.v,
+	}));
 };
 
 // ---------------------------------------------------------------------------
-// Yahoo Finance — options chain
+// Polygon — spot price
 // ---------------------------------------------------------------------------
 
-const YahooOptionItemZ = z.object({
-	strike: z.number(),
-	bid: z.number(),
-	ask: z.number(),
-	lastPrice: z.number(),
-	impliedVolatility: z.number(),
-	volume: z.number().optional().default(0),
-	openInterest: z.number().optional().default(0),
-	expiration: z.number(),
+const fetchSpot = async (ticker: string): Promise<number> => {
+	// Use latest daily close bar — works on free tier for equities and indices
+	const polygonTicker = ticker === "SPX" ? "I:SPX" : ticker;
+	const to = new Date();
+	const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+	const bars = await fetchHistoricalPrices(polygonTicker, from, to);
+	const last = bars.at(-1);
+	if (!last) throw new Error(`No price data for ${ticker}`);
+	return last.close;
+};
+
+// ---------------------------------------------------------------------------
+// Polygon — options snapshot (v3/snapshot/options)
+// ---------------------------------------------------------------------------
+//
+// The options snapshot endpoint requires a paid plan. On the free tier we
+// enumerate contracts via /v3/reference/options/contracts (free) and then
+// fetch the previous day's OHLCV close per contract via /v2/aggs (free).
+// The close price is used as the market mid; we derive IV ourselves via
+// the impliedVol() inverter in bs-model.ts.
+// ---------------------------------------------------------------------------
+
+import { impliedVol } from "./bs-model.ts";
+
+const PolygonContractZ = z.object({
+	ticker: z.string(),
+	contract_type: z.enum(["call", "put"]),
+	strike_price: z.number(),
+	expiration_date: z.string(),
 });
 
-const YahooOptionsZ = z.object({
-	optionChain: z.object({
-		result: z.array(z.object({
-			quote: z.object({ regularMarketPrice: z.number() }),
-			options: z.array(z.object({
-				expirationDate: z.number(),
-				calls: z.array(YahooOptionItemZ),
-				puts: z.array(YahooOptionItemZ),
-			})),
-		})),
-	}),
+const PolygonContractsPageZ = z.object({
+	results: z.array(PolygonContractZ).optional().default([]),
+	next_url: z.string().optional(),
+	status: z.string(),
 });
 
-const parseOptionItem = (
-	item: z.infer<typeof YahooOptionItemZ>,
-	type: "call" | "put",
-): OptionQuote => ({
-	strike: item.strike,
-	expiry: new Date(item.expiration * 1000),
-	expiryTs: item.expiration,
-	bid: item.bid,
-	ask: item.ask,
-	mid: (item.bid + item.ask) / 2,
-	iv: item.impliedVolatility,
-	volume: item.volume,
-	openInterest: item.openInterest,
-	type,
-});
+/** Enumerate all option contract tickers for an underlying within a date range */
+const listContracts = async (
+	underlying: string,
+	fromDate: string,
+	toDate: string,
+): Promise<z.infer<typeof PolygonContractZ>[]> => {
+	const acc: z.infer<typeof PolygonContractZ>[] = [];
+	let next: string | undefined =
+		`${BASE}/v3/reference/options/contracts` +
+		`?underlying_ticker=${underlying}` +
+		`&expiration_date.gte=${fromDate}` +
+		`&expiration_date.lte=${toDate}` +
+		`&limit=250`;
+
+	while (next) {
+		const sep = next.includes("?") ? "&" : "?";
+		const res = await axios.get(`${next}${sep}apiKey=${apiKey()}`);
+		const parsed = PolygonContractsPageZ.parse(res.data);
+		acc.push(...parsed.results);
+		next = parsed.next_url;
+		if (acc.length >= 1000) break;
+	}
+	return acc;
+};
+
+/** Fetch the most recent daily close for a single option contract ticker */
+const fetchContractClose = async (
+	ticker: string,
+	asOf: string,
+): Promise<number | null> => {
+	// Look back 5 calendar days to catch the last trading day
+	const from = new Date(asOf);
+	from.setDate(from.getDate() - 5);
+	const url = `${BASE}/v2/aggs/ticker/${ticker}/range/1/day/${from.toISOString().slice(0, 10)}/${asOf}` +
+		`?adjusted=true&sort=desc&limit=1&apiKey=${apiKey()}`;
+	const res = await axios.get(url);
+	const parsed = PolygonAggsZ.parse(res.data);
+	return parsed.results[0]?.c ?? null;
+};
 
 /**
- * Fetch a live options chain snapshot for `ticker`.
- *
- * Pass `expiryTs` (Unix seconds) to pin a specific expiry;
- * omit to use the nearest available expiry.
- *
- * Requires Deno --allow-net flag.
+ * Fetch an options chain snapshot for `ticker` using prior-day closing prices.
+ * Covers options expiring within the next 45 days by default.
+ * Pass `expiryDate` as "YYYY-MM-DD" to pin a specific expiry.
  */
 export const fetchOptionsChain = async (
 	ticker: string,
-	expiryTs?: number,
+	expiryDate?: string,
 ): Promise<MarketSnapshot> => {
-	const url = expiryTs
-		? `https://query2.finance.yahoo.com/v7/finance/options/${ticker}?date=${expiryTs}`
-		: `https://query2.finance.yahoo.com/v7/finance/options/${ticker}`;
+	const spot = await fetchSpot(ticker);
+	const underlying = ticker === "SPX" ? "SPXW" : ticker;
+	const today = new Date().toISOString().slice(0, 10);
+	const maxExpiry = expiryDate ?? (() => {
+		const d = new Date();
+		d.setDate(d.getDate() + 45);
+		return d.toISOString().slice(0, 10);
+	})();
 
-	const res = await axios.get(url, {
-		headers: { "User-Agent": "Mozilla/5.0" },
-	});
-	const parsed = YahooOptionsZ.parse(res.data);
-	const result = parsed.optionChain.result[0];
-	if (!result) throw new Error(`No options data for ${ticker}`);
+	const contracts = await listContracts(underlying, today, maxExpiry);
 
-	const spot = result.quote.regularMarketPrice;
-	const chain = result.options[0];
-	if (!chain) throw new Error(`No option expiry data for ${ticker}`);
+	// Focus on near-ATM strikes (±20%) to limit API calls
+	const atmFilter = (k: number) => Math.abs(k / spot - 1) < 0.20;
+	const liquid = contracts.filter((c) => atmFilter(c.strike_price));
 
-	return {
-		ticker,
-		asOf: new Date(),
-		spot,
-		calls: chain.calls.map((c) => parseOptionItem(c, "call")),
-		puts: chain.puts.map((p) => parseOptionItem(p, "put")),
-	};
+	// Fetch closes in small concurrent batches of 10
+	const calls: OptionQuote[] = [];
+	const puts: OptionQuote[] = [];
+
+	const BATCH = 10;
+	for (let i = 0; i < liquid.length; i += BATCH) {
+		const batch = liquid.slice(i, i + BATCH);
+		const closes = await Promise.all(
+			batch.map((c) => fetchContractClose(c.ticker, today)),
+		);
+
+		for (let j = 0; j < batch.length; j++) {
+			const c = batch[j]!;
+			const close = closes[j];
+			if (close == null || close <= 0) continue;
+
+			const expiry = new Date(c.expiration_date + "T21:00:00Z");
+			const T = Math.max(
+				(expiry.getTime() - Date.now()) / (1000 * 60 * 60 * 24 * 365.25),
+				1 / 365,
+			);
+			const expiryTs = Math.floor(expiry.getTime() / 1000);
+
+			// Derive IV from the close price using our BS inverter
+			let iv = 0;
+			try {
+				iv = impliedVol(close, {
+					spot: { t: spot, p: 0, f: 0, l: 0 },
+					strike: c.strike_price,
+					expiry: T,
+					rate: 0.0525,
+					vol: { t: 0.20, p: 0, f: 0, l: 0 },
+				});
+			} catch {
+				iv = 0;
+			}
+
+			const quote: OptionQuote = {
+				strike: c.strike_price,
+				expiry,
+				expiryTs,
+				bid: close * 0.99,   // synthetic spread: ±1%
+				ask: close * 1.01,
+				mid: close,
+				iv,
+				volume: 1,
+				openInterest: 1,
+				type: c.contract_type,
+			};
+
+			if (c.contract_type === "call") calls.push(quote);
+			else puts.push(quote);
+		}
+	}
+
+	return { ticker, asOf: new Date(), spot, calls, puts };
 };
 
 // ---------------------------------------------------------------------------
