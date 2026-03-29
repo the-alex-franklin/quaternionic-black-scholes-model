@@ -179,3 +179,104 @@ export const price = (params: BSParams): BSResult => {
 
 	return { d1, d2, call, put };
 };
+
+// ---------------------------------------------------------------------------
+// Greeks
+// ---------------------------------------------------------------------------
+
+export type BSGreeks = {
+	/**
+	 * Delta — ∂C_Q/∂S_Q ≈ N_Q(d₁), ∂P_Q/∂S_Q = delta.call − 1
+	 *
+	 * Real part = classical Δ = N(d₁) for calls, N(d₁)−1 for puts.
+	 * Imaginary parts = first-order Δ sensitivities to funding/liquidity dimensions.
+	 */
+	delta: { call: Quaternion; put: Quaternion };
+
+	/**
+	 * Gamma — ∂²C/∂S² (real scalar: second-order, same for call and put).
+	 *
+	 * Γ = n(d₁) / (S·|Σ|·√T)
+	 *
+	 * Lifted to a scalar because second-order quaternionic cross-terms would
+	 * require the full 4×4 Hessian; the real part is the actionable value.
+	 */
+	gamma: number;
+
+	/**
+	 * Vega — ∂C_Q/∂|Σ| (same for call and put by put-call parity).
+	 *
+	 * Real part = classical ν = S·n(d₁)·√T.
+	 * Imaginary parts propagate spot's imaginary components through n(d₁)·√T,
+	 * reflecting how funding/liquidity-adjusted notional drives vol sensitivity.
+	 */
+	vega: Quaternion;
+
+	/**
+	 * Theta — ∂C_Q/∂(−T), time decay per year.
+	 *
+	 * Classical:  Θ_call = −S·n(d₁)·σ/(2√T) − r·K·e^{−rT}·N(d₂)
+	 *             Θ_put  = Θ_call + r·K·e^{−rT}   (from parity)
+	 */
+	theta: { call: Quaternion; put: Quaternion };
+
+	/**
+	 * Rho — ∂C_Q/∂r.
+	 *
+	 * Classical:  ρ_call =  K·T·e^{−rT}·N(d₂)
+	 *             ρ_put  = −K·T·e^{−rT}·N(1−d₂) = ρ_call − K·T·e^{−rT}
+	 */
+	rho: { call: Quaternion; put: Quaternion };
+};
+
+/**
+ * Compute the five standard quaternionic Greeks.
+ *
+ * All real parts recover the classical 1973 Black-Scholes values exactly
+ * when spot and vol are purely real.
+ */
+export const greeks = (params: BSParams): BSGreeks => {
+	const { spot, strike, expiry: T, rate: r, vol } = params;
+	const { d1, d2 } = price(params);
+
+	const volAbs = norm(vol);
+	const sqrtT = Math.sqrt(T);
+	const discount = Math.exp(-r * T);
+	const n1 = normalPDF(d1.t); // n(d₁.t)
+
+	// --- delta ---
+	// ∂C_Q/∂S_Q ≈ N_Q(d₁)  (leading term; the S-dependence inside d₁ cancels classically)
+	const deltaCall = quatN(d1);
+	const deltaPut = subtract(deltaCall, { t: 1, p: 0, f: 0, l: 0 });
+
+	// --- gamma ---
+	// Real scalar:  n(d₁) / (S·|Σ|·√T)
+	const gamma = n1 / (spot.t * volAbs * sqrtT);
+
+	// --- vega ---
+	// ∂C_Q/∂|Σ| = S_Q · n(d₁) · √T
+	// Imaginary parts: funding/liquidity notionals experience the same vol sensitivity
+	const vega = scale(spot, n1 * sqrtT);
+
+	// --- theta ---
+	// Θ_call = −S_Q·n(d₁)·|Σ|/(2√T)  −  r·K·e^{−rT}·N_Q(d₂)
+	const thetaDecay = scale(spot, -n1 * volAbs / (2 * sqrtT));
+	const thetaCarry = scale(quatN(d2), -r * strike * discount);
+	const thetaCall = add(thetaDecay, thetaCarry);
+	// Θ_put = Θ_call + r·K·e^{−rT}  (put-call parity differentiated w.r.t. T)
+	const thetaPut = add(thetaCall, { t: r * strike * discount, p: 0, f: 0, l: 0 });
+
+	// --- rho ---
+	// ρ_call =  K·T·e^{−rT}·N_Q(d₂)
+	const rhoCall = scale(quatN(d2), strike * T * discount);
+	// ρ_put  = ρ_call − K·T·e^{−rT}·1   (parity: ∂/∂r [K·e^{−rT}] = −K·T·e^{−rT})
+	const rhoPut = subtract(rhoCall, { t: strike * T * discount, p: 0, f: 0, l: 0 });
+
+	return {
+		delta: { call: deltaCall, put: deltaPut },
+		gamma,
+		vega,
+		theta: { call: thetaCall, put: thetaPut },
+		rho: { call: rhoCall, put: rhoPut },
+	};
+};

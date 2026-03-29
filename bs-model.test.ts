@@ -96,8 +96,14 @@ Deno.test("classical BS: d₁ = 0.35, d₂ = 0.15", () => {
 	near(d2.p, 0);
 	near(d2.f, 0);
 	near(d2.l, 0);
+	near(d1.l, 0);
+	near(d2.p, 0);
+	near(d2.f, 0);
+	near(d2.l, 0);
 });
-
+	near(call.p, 0);
+	near(call.f, 0);
+	near(call.l, 0);
 Deno.test("classical BS: call price ≈ 10.4506", () => {
 	const { call } = price(classic);
 	near(call.t, 10.4506, 1e-3);
@@ -138,7 +144,7 @@ Deno.test("deep OTM call approaches zero", () => {
 // ---------------------------------------------------------------------------
 // Quaternionic extension — non-zero imaginary inputs
 // ---------------------------------------------------------------------------
-
+	near(call.t, 10.4506, 1); // within $1
 Deno.test("funding-vol perturbation: real component stays near classical", () => {
 	// Adding a small funding-rate vol component (5%) shouldn't move the classical
 	// call price by more than a few ticks in the real dimension.
@@ -202,4 +208,115 @@ Deno.test("throws on zero vol", () => {
 		() => price({ ...classic, vol: { t: 0, p: 0, f: 0, l: 0 } }),
 		Error,
 	);
+});
+
+// ---------------------------------------------------------------------------
+// Greeks — classical recovery (real inputs)
+//
+// Benchmark: S=100, K=100, T=1, r=5%, σ=20%
+//   d₁ = 0.35, d₂ = 0.15
+//   Δ_call = N(0.35) ≈ 0.6368
+//   Γ      = n(0.35)/(100·0.20·1) ≈ 0.01862
+//   ν      = 100·n(0.35)·1 ≈ 37.524
+//   Θ_call = −100·n(0.35)·0.20/2 − 0.05·100·e^{−0.05}·N(0.15)
+//   ρ_call = 100·1·e^{−0.05}·N(0.15)
+// ---------------------------------------------------------------------------
+
+const d1t = 0.35;
+const d2t = 0.15;
+
+Deno.test("Greeks: delta.call.t = N(d₁), no imaginary leakage", () => {
+	const { delta } = greeks(classic);
+	near(delta.call.t, normalCDF(d1t), 1e-6);
+	near(delta.call.p, 0);
+	near(delta.call.f, 0);
+	near(delta.call.l, 0);
+});
+
+Deno.test("Greeks: delta.put.t = N(d₁) − 1", () => {
+	const { delta } = greeks(classic);
+	near(delta.put.t, normalCDF(d1t) - 1, 1e-6);
+});
+
+Deno.test("Greeks: delta call + |delta put| = 1", () => {
+	const { delta } = greeks(classic);
+	near(delta.call.t - delta.put.t, 1);
+});
+
+Deno.test("Greeks: gamma = n(d₁)/(S·σ·√T)", () => {
+	const { gamma } = greeks(classic);
+	const expected = normalPDF(d1t) / (100 * 0.20 * 1);
+	near(gamma, expected);
+});
+
+Deno.test("Greeks: vega.t = S·n(d₁)·√T", () => {
+	const { vega } = greeks(classic);
+	const expected = 100 * normalPDF(d1t) * 1;
+	near(vega.t, expected);
+	// Real inputs → no imaginary leakage
+	near(vega.p, 0); near(vega.f, 0); near(vega.l, 0);
+});
+
+Deno.test("Greeks: vega same for call and put (put-call parity)", () => {
+	// ∂C/∂σ − ∂P/∂σ = ∂/∂σ[S − K·e^{−rT}] = 0
+	// So vega is identical for calls and puts — the single quaternion covers both.
+	const { vega } = greeks(classic);
+	near(vega.t, 100 * normalPDF(d1t));
+});
+
+Deno.test("Greeks: theta.call.t = classical formula", () => {
+	const { theta } = greeks(classic);
+	const discount = Math.exp(-0.05);
+	const expected = -(100 * normalPDF(d1t) * 0.20) / 2 - 0.05 * 100 * discount * normalCDF(d2t);
+	near(theta.call.t, expected, 1e-5);
+});
+
+Deno.test("Greeks: theta put-call parity Θ_put = Θ_call + r·K·e^{−rT}", () => {
+	const { theta } = greeks(classic);
+	const discount = Math.exp(-0.05);
+	near(theta.put.t - theta.call.t, 0.05 * 100 * discount, 1e-6);
+});
+
+Deno.test("Greeks: rho.call.t = K·T·e^{−rT}·N(d₂)", () => {
+	const { rho } = greeks(classic);
+	const discount = Math.exp(-0.05);
+	const expected = 100 * 1 * discount * normalCDF(d2t);
+	near(rho.call.t, expected, 1e-5);
+});
+
+Deno.test("Greeks: rho put-call parity ρ_put = ρ_call − K·T·e^{−rT}", () => {
+	const { rho } = greeks(classic);
+	const discount = Math.exp(-0.05);
+	near(rho.call.t - rho.put.t, 100 * 1 * discount, 1e-6);
+});
+
+// ---------------------------------------------------------------------------
+// Greeks — quaternionic extension (non-zero imaginary inputs)
+// ---------------------------------------------------------------------------
+
+const quatParams: BSParams = {
+	spot: { t: 100, p: 2.0, f: 1.0, l: 0 },
+	strike: 100,
+	expiry: 1,
+	rate: 0.05,
+	vol: { t: 0.20, p: 0.05, f: 0, l: 0 },
+};
+
+Deno.test("Greeks: quaternionic delta.call carries non-zero imaginary parts", () => {
+	const { delta } = greeks(quatParams);
+	// quatN propagates imaginary parts of d₁ through normalPDF
+	assertAlmostEquals(Math.abs(delta.call.p) > 0 ? 1 : 0, 1, 1e-10);
+});
+
+Deno.test("Greeks: quaternionic vega imaginary parts match spot imaginary × n(d₁)", () => {
+	const { vega } = greeks(quatParams);
+	const { d1 } = price(quatParams);
+	// vega = scale(spot, n(d₁.t)·√T)
+	near(vega.p, quatParams.spot.p * normalPDF(d1.t));
+	near(vega.f, quatParams.spot.f * normalPDF(d1.t));
+});
+
+Deno.test("Greeks: quaternionic gamma stays positive and real", () => {
+	const { gamma } = greeks(quatParams);
+	assertAlmostEquals(gamma > 0 ? 1 : 0, 1, 1e-10);
 });
