@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { loadSync } from "jsr:@std/dotenv";
+import { loadSync } from "dotenv";
 
 loadSync({ export: true });
 

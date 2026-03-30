@@ -5,6 +5,7 @@
 	},
 	"imports": {
 		"@std/assert": "jsr:@std/assert",
+		"dotenv": "jsr:@std/dotenv",
 		"fp-try": "jsr:@2or3godzillas/fp-try@^1.2.0",
 		"axios": "npm:axios",
 		"zod": "npm:zod"
