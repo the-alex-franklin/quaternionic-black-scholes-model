@@ -82,7 +82,7 @@ export const quatN = (q: Quaternion): Quaternion => {
 	// Imaginary scale correction: −N'''(t)/6 · |v|² = −(t²−1)·n(t)/6 · |v|²
 	const imagScale = n1 * (1 - (q.t ** 2 - 1) / 6 * vNormSq);
 	return {
-		t: n0 + realCorrection,
+		t: Math.max(0, Math.min(1, n0 + realCorrection)),
 		p: imagScale * q.p,
 		f: imagScale * q.f,
 		l: imagScale * q.l,
@@ -189,9 +189,18 @@ export const price = (params: BSParams): BSResult => {
 
 	// C_Q = S_Q · N_Q(d₁)  −  K·e^{−rT} · N_Q(d₂)
 	const discount = Math.exp(-r * T);
-	const call = subtract(multiply(spot, Nd1), scale(Nd2, strike * discount));
+	const rawCall = subtract(multiply(spot, Nd1), scale(Nd2, strike * discount));
+
+	// Clamp call.t to its no-arbitrage lower bound (intrinsic value).
+	// The imaginary cross-terms in S_Q · N_Q(d₁) can shave a few dollars off
+	// call.t, which is negligible on an ATM call but enough to push a nearly
+	// worthless put negative via parity. Parity is then restored by recomputing
+	// put from the clamped call rather than clamping both sides independently.
+	const intrinsicCall = Math.max(spot.t - strike * discount, 0);
+	const call = { ...rawCall, t: Math.max(rawCall.t, intrinsicCall) };
 
 	// Quaternionic put-call parity: P_Q = C_Q − S_Q + K·e^{−rT}·1
+	// Recomputed from the (possibly clamped) call so parity holds exactly.
 	const put = add(subtract(call, spot), { t: strike * discount, p: 0, f: 0, l: 0 });
 
 	return { d1, d2, call, put };

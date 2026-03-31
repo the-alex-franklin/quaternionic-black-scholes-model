@@ -157,6 +157,7 @@
     "dependencies": [
       "jsr:@2or3godzillas/fp-try@^1.2.0",
       "jsr:@std/assert@*",
+      "jsr:@std/dotenv@*",
       "npm:axios@*",
       "npm:zod@*"
     ]

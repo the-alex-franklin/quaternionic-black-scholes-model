@@ -27,6 +27,7 @@
 import { type OptionQuote, type MarketSnapshot } from "./market-data.ts";
 import { impliedVol as bsImpliedVol, price as bsPrice, type BSParams } from "./bs-model.ts";
 import type { Quaternion } from "./quaternion.ts";
+import { extractVolCurve } from "./fft.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,9 +50,10 @@ export type BacktestResult = {
 	asOf: Date;
 	spot: number;
 	rate: number;
-	volT: number;                 // ATM implied vol (vol.t)
-	volP: number;                 // fitted skew component (vol.p)
-	volF: number;                 // fitted term-structure component (vol.f)
+	volT: number;                 // ATM implied vol (vol.t) — DFT DC mode
+	volP: number;                 // skew (vol.p) — DFT first-mode derivative
+	volF: number;                 // term structure (vol.f) — OLS vs √T
+	volL: number;                 // curvature (vol.l) — DFT second-mode
 	spotP: number;                // funding pressure (spot.p)
 	spotF: number;                // liquidity pressure (spot.f)
 	comparisons: PricingComparison[];
@@ -102,10 +104,14 @@ const liquidQuotes = (quotes: OptionQuote[]): OptionQuote[] =>
 /**
  * Fit quaternionic vol from the options surface.
  *
- *   vol.t — ATM implied vol: IV of the call closest to spot (log-moneyness ≈ 0)
- *   vol.p — skew slope: OLS of IV vs log(K/S) across all liquid options
- *   vol.f — term-structure slope: OLS of IV vs √T  (if multiple expiries present)
- *   vol.l — 0 (emergent cross-term)
+ *   vol.t — smoothed ATM implied vol (DFT DC mode at log-moneyness = 0)
+ *   vol.p — skew: dIV/d(log-moneyness) at ATM (DFT first-mode derivative)
+ *   vol.f — term-structure slope: OLS of mean-IV vs √T across expiries
+ *   vol.l — smile curvature: d²IV/d(log-moneyness)² at ATM (DFT second-mode)
+ *
+ * vol.t/p/l are extracted via DFT-based low-pass filtering of the IV curve,
+ * which separates the smooth smile signal from noise in illiquid/stale quotes.
+ * vol.f is kept on OLS since it operates along a separate axis (√T).
  */
 export const fitQuatVol = (
 	snapshot: MarketSnapshot,
@@ -113,22 +119,13 @@ export const fitQuatVol = (
 ): { vol: Quaternion; atm: number } => {
 	const allQuotes = liquidQuotes([...snapshot.calls, ...snapshot.puts]);
 	const S = snapshot.spot;
-	const T0 = timeToExpiry(snapshot.asOf, allQuotes[0]?.expiry ?? snapshot.asOf);
 
-	// ATM implied vol: nearest-to-spot call
-	const atmCall = liquidQuotes(snapshot.calls).reduce(
-		(best, q) =>
-			Math.abs(Math.log(q.strike / S)) < Math.abs(Math.log(best.strike / S)) ? q : best,
-		liquidQuotes(snapshot.calls)[0] ?? { strike: S, iv: 0.2 } as OptionQuote,
-	);
-	const volT = atmCall.iv;
-
-	// vol.p: IV skew slope vs log-moneyness
+	// vol.t, vol.p, vol.l — DFT of IV vs log-moneyness
 	const moneyness = allQuotes.map((q) => Math.log(q.strike / S));
 	const ivs = allQuotes.map((q) => q.iv);
-	const { slope: volP } = ols(moneyness, ivs);
+	const { volT, volP, volL } = extractVolCurve(moneyness, ivs);
 
-	// vol.f: term-structure slope vs √T (only meaningful if multi-expiry data)
+	// vol.f — OLS of mean IV vs √T across expiry groups
 	const expiryGroups = new Map<number, number[]>();
 	for (const q of allQuotes) {
 		const t = timeToExpiry(snapshot.asOf, q.expiry);
@@ -140,7 +137,7 @@ export const fitQuatVol = (
 	);
 	const { slope: volF } = ols(tsPoints.map(([t]) => t), tsPoints.map(([, iv]) => iv));
 
-	const vol: Quaternion = { t: volT, p: volP, f: volF, l: 0 };
+	const vol: Quaternion = { t: volT, p: volP, f: volF, l: volL };
 	return { vol, atm: volT };
 };
 
@@ -174,12 +171,19 @@ export const extractQuatSpot = (
 		? (atmCall.mid - atmPut.mid - S + atmStrike * discount) / S
 		: 0;
 
-	// Mean normalised bid–ask spread × S
-	const allLiquid = liquidQuotes([...calls, ...puts]);
-	const meanSpread = allLiquid.length > 0
-		? allLiquid.reduce((s, q) => s + (q.ask - q.bid) / q.mid, 0) / allLiquid.length
+	// Liquidity pressure: mean normalised bid–ask spread of near-ATM options × S.
+	// We restrict to within ±10% of spot because deep OTM spreads are wide by
+	// construction and tell us nothing about underlying spot liquidity.
+	// Also capped at 3% of spot: quatN is a second-order Taylor expansion valid
+	// only for small imaginary perturbations (|v(d1)| < ~0.5), which requires
+	// the imaginary components of spot to stay below ~3% of the real part.
+	const atmLiquid = liquidQuotes([...calls, ...puts]).filter(
+		(q) => Math.abs(q.strike / S - 1) < 0.10,
+	);
+	const meanSpread = atmLiquid.length > 0
+		? atmLiquid.reduce((s, q) => s + Math.min((q.ask - q.bid) / q.mid, 1.0), 0) / atmLiquid.length
 		: 0;
-	const spotF = meanSpread * S;
+	const spotF = Math.min(meanSpread * S, 0.03 * S);
 
 	return { t: S, p: spotP * S, f: spotF, l: 0 };
 };
@@ -201,9 +205,14 @@ export const runBacktest = (snapshot: MarketSnapshot, rate: number): BacktestRes
 	const S = snapshot.spot;
 	const { vol, atm: volT } = fitQuatVol(snapshot, rate);
 
-	// Use the first expiry present in the chain
+	// Pick the nearest expiry with at least MIN_DTE days to go.
+	// Very short-dated options have tiny sqrt(T) denominators that amplify the
+	// imaginary components of d1 beyond the Taylor regime of quatN.
+	const MIN_DTE = 7;
+	const minTs = snapshot.asOf.getTime() / 1000 + MIN_DTE * 24 * 60 * 60;
 	const firstExpiry = [...snapshot.calls, ...snapshot.puts]
 		.map((q) => q.expiryTs)
+		.filter((ts) => ts >= minTs)
 		.sort((a, b) => a - b)[0];
 
 	const firstExpiryDate = firstExpiry
@@ -297,6 +306,7 @@ export const runBacktest = (snapshot: MarketSnapshot, rate: number): BacktestRes
 		volT,
 		volP: vol.p,
 		volF: vol.f,
+		volL: vol.l,
 		spotP: quatSpot.p,
 		spotF: quatSpot.f,
 		comparisons,

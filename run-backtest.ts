@@ -1,27 +1,38 @@
 /**
  * run-backtest.ts
  *
- * Fetches live options chains for SPY, SPX, and AAPL via Polygon.io
- * and runs the quaternionic vs classical BS backtest on each.
+ * Fetches live options chains and runs the quaternionic vs classical BS backtest.
+ *
+ * Crypto (BTC, ETH): Deribit public API — no key needed.
+ * Equities (SPY, SPX, AAPL): Polygon.io — requires POLYGON_API_KEY env var.
  *
  * Usage:
  *   deno run --allow-net --allow-env --allow-read run-backtest.ts
+ *   deno run --allow-net --allow-env --allow-read run-backtest.ts BTC
+ *   deno run --allow-net --allow-env --allow-read run-backtest.ts ETH BTC
  */
 
-import { fetchOptionsChain } from "./market-data.ts";
+import { fetchDeribitOptionsChain, fetchOptionsChain } from "./market-data.ts";
 import { runBacktest } from "./backtest.ts";
 
-const RATE = 0.0525; // ~5.25% risk-free (3-month T-bill, March 2026)
-const TICKERS = ["SPY", "SPX", "AAPL"];
+const CRYPTO_RATE = 0.0525;
+const EQUITY_RATE = 0.0525;
+const DERIBIT_TICKERS = new Set(["BTC", "ETH"]);
 
-for (const ticker of TICKERS) {
+const args = Deno.args.length > 0 ? Deno.args : ["BTC", "ETH"];
+
+for (const ticker of args) {
 	console.log(`\n${"─".repeat(60)}`);
 	console.log(`  ${ticker}`);
 	console.log(`${"─".repeat(60)}`);
 
 	try {
-		const snapshot = await fetchOptionsChain(ticker);
-		const result = runBacktest(snapshot, RATE);
+		const isCrypto = DERIBIT_TICKERS.has(ticker.toUpperCase());
+		const snapshot = isCrypto
+			? await fetchDeribitOptionsChain(ticker.toUpperCase() as "BTC" | "ETH")
+			: await fetchOptionsChain(ticker);
+		const rate = isCrypto ? CRYPTO_RATE : EQUITY_RATE;
+		const result = runBacktest(snapshot, rate);
 
 		const pct = (x: number) => (x * 100).toFixed(4) + "%";
 		const usd = (x: number) => "$" + x.toFixed(4);
@@ -34,6 +45,7 @@ for (const ticker of TICKERS) {
 		console.log(`  vol.t (ATM IV) : ${pct(result.volT)}`);
 		console.log(`  vol.p (skew)   : ${sign(result.volP)}`);
 		console.log(`  vol.f (TS)     : ${sign(result.volF)}`);
+		console.log(`  vol.l (curv.)  : ${sign(result.volL)}`);
 		console.log(`  spot.p (fund.) : ${usd(result.spotP)}`);
 		console.log(`  spot.f (liq.)  : ${usd(result.spotF)}`);
 		console.log(``);
