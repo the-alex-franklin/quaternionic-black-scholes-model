@@ -46,8 +46,7 @@ for (const ticker of args) {
 		console.log(`  vol.p (skew)   : ${sign(result.volP)}`);
 		console.log(`  vol.f (TS)     : ${sign(result.volF)}`);
 		console.log(`  vol.l (curv.)  : ${sign(result.volL)}`);
-		console.log(`  spot.p (fund.) : ${usd(result.spotP)}`);
-		console.log(`  spot.f (liq.)  : ${usd(result.spotF)}`);
+		console.log(`  spot.p (fund.) : ${usd(result.spotP)}  (= funding_8h × spot)`);
 		console.log(``);
 		console.log(`  Classical RMSE : ${usd(result.classicalRMSE)}`);
 		console.log(`  Quatern.  RMSE : ${usd(result.quaternionicRMSE)}`);

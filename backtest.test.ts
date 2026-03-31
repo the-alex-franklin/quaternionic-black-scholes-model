@@ -176,11 +176,10 @@ Deno.test("extractQuatSpot: spot.l is zero (emergent)", () => {
 	assertAlmostEquals(qSpot.l, 0, 1e-10);
 });
 
-Deno.test("extractQuatSpot: parity residual is near zero for synthetic fair-valued options", () => {
-	// Synthetic options are priced exactly, so put-call parity should hold
+Deno.test("extractQuatSpot: spot.p is zero when no funding rate in snapshot", () => {
+	// fixtureSnapshot has no funding8h field → spot.p = 0
 	const qSpot = extractQuatSpot(fixtureSnapshot, RATE, EXPIRY_TS);
-	// spot.p is small relative to SPOT
-	assertAlmostEquals(Math.abs(qSpot.p / SPOT) < 0.05 ? 1 : 0, 1, 1e-10);
+	assertAlmostEquals(qSpot.p, 0, 1e-10);
 });
 
 // ---------------------------------------------------------------------------

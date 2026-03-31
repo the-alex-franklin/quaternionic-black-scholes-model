@@ -10,18 +10,19 @@
  * Four market-observable quantities map cleanly to the four quaternion
  * dimensions of vol and spot:
  *
- *   vol.t   — ATM implied vol (classical σ)
- *   vol.p   — vol skew: slope of IV vs log-moneyness (funding vol)
- *   vol.f   — vol term structure: slope of IV vs T^{1/2} (liquidity vol)
- *   vol.l   — 0 (emergent; let the model generate it via Σ²)
+ *   vol.t   — ATM implied vol (DFT DC mode)
+ *   vol.p   — skew: dIV/d(log-moneyness) at ATM (DFT first-mode derivative)
+ *   vol.f   — term structure: OLS slope of mean-IV vs √T
+ *   vol.l   — curvature: d²IV/d(log-moneyness)² at ATM (DFT second-mode)
  *
  *   spot.t  — market price of the underlying
- *   spot.p  — put–call parity residual / spot (funding pressure)
- *   spot.f  — mean normalised bid–ask spread × spot (liquidity pressure)
+ *   spot.p  — perpetual funding rate cost: funding_8h × spot (dollars)
+ *   spot.f  — 0 (reserved)
  *   spot.l  — 0 (emergent)
  *
- * The hypothesis: quaternionic RMSE < classical RMSE because vol.p/vol.f
- * capture the implied vol smile that classical flat-vol BS ignores.
+ * The hypothesis: quaternionic RMSE < classical RMSE because encoding
+ * funding rate pressure and vol surface shape in the imaginary dimensions
+ * captures cross-market effects that classical flat-vol BS ignores.
  */
 
 import { type OptionQuote, type MarketSnapshot } from "./market-data.ts";
@@ -54,8 +55,7 @@ export type BacktestResult = {
 	volP: number;                 // skew (vol.p) — DFT first-mode derivative
 	volF: number;                 // term structure (vol.f) — OLS vs √T
 	volL: number;                 // curvature (vol.l) — DFT second-mode
-	spotP: number;                // funding pressure (spot.p)
-	spotF: number;                // liquidity pressure (spot.f)
+	spotP: number;                // funding pressure: funding_8h × spot (spot.p)
 	comparisons: PricingComparison[];
 	classicalRMSE: number;
 	quaternionicRMSE: number;
@@ -145,47 +145,23 @@ export const fitQuatVol = (
  * Extract quaternionic spot from market data.
  *
  *   spot.t — market price
- *   spot.p — put–call parity residual / S (funding pressure)
- *   spot.f — mean normalised bid–ask spread × S (liquidity pressure)
+ *   spot.p — perpetual funding rate cost in dollars (funding_8h × spot)
+ *   spot.f — 0 (reserved; bid-ask proxy was too noisy to be useful)
  *   spot.l — 0 (emergent)
  */
 export const extractQuatSpot = (
 	snapshot: MarketSnapshot,
-	rate: number,
-	expiryTs: number,
+	_rate: number,
+	_expiryTs: number,
 ): Quaternion => {
 	const S = snapshot.spot;
-	const calls = liquidQuotes(snapshot.calls.filter((q) => q.expiryTs === expiryTs));
-	const puts = liquidQuotes(snapshot.puts.filter((q) => q.expiryTs === expiryTs));
-	const T = timeToExpiry(snapshot.asOf, new Date(expiryTs * 1000));
-	const discount = Math.exp(-rate * T);
 
-	// ATM put–call parity residual
-	const atmStrike = calls.reduce(
-		(best, q) => Math.abs(q.strike - S) < Math.abs(best.strike - S) ? q : best,
-		calls[0] ?? { strike: S } as OptionQuote,
-	).strike;
-	const atmCall = calls.find((q) => q.strike === atmStrike);
-	const atmPut = puts.find((q) => q.strike === atmStrike);
-	const spotP = (atmCall && atmPut)
-		? (atmCall.mid - atmPut.mid - S + atmStrike * discount) / S
-		: 0;
+	// Funding pressure: actual 8h perp funding rate × spot, in dollars.
+	// Positive = longs pay shorts (contango); negative = shorts pay longs (backwardation).
+	// Directly measured from the perpetual swap; no option-chain inference needed.
+	const spotP = (snapshot.funding8h ?? 0) * S;
 
-	// Liquidity pressure: mean normalised bid–ask spread of near-ATM options × S.
-	// We restrict to within ±10% of spot because deep OTM spreads are wide by
-	// construction and tell us nothing about underlying spot liquidity.
-	// Also capped at 3% of spot: quatN is a second-order Taylor expansion valid
-	// only for small imaginary perturbations (|v(d1)| < ~0.5), which requires
-	// the imaginary components of spot to stay below ~3% of the real part.
-	const atmLiquid = liquidQuotes([...calls, ...puts]).filter(
-		(q) => Math.abs(q.strike / S - 1) < 0.10,
-	);
-	const meanSpread = atmLiquid.length > 0
-		? atmLiquid.reduce((s, q) => s + Math.min((q.ask - q.bid) / q.mid, 1.0), 0) / atmLiquid.length
-		: 0;
-	const spotF = Math.min(meanSpread * S, 0.03 * S);
-
-	return { t: S, p: spotP * S, f: spotF, l: 0 };
+	return { t: S, p: spotP, f: 0, l: 0 };
 };
 
 // ---------------------------------------------------------------------------
@@ -308,7 +284,6 @@ export const runBacktest = (snapshot: MarketSnapshot, rate: number): BacktestRes
 		volF: vol.f,
 		volL: vol.l,
 		spotP: quatSpot.p,
-		spotF: quatSpot.f,
 		comparisons,
 		classicalRMSE,
 		quaternionicRMSE,

@@ -50,6 +50,8 @@ export type MarketSnapshot = {
 	spot: number;
 	calls: OptionQuote[];
 	puts: OptionQuote[];
+	/** 8-hour perpetual funding rate (signed, e.g. 0.0001 = 0.01%). Undefined for equities. */
+	funding8h?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -301,6 +303,12 @@ const DeribitIndexZ = z.object({
 	result: z.object({ index_price: z.number() }),
 });
 
+const DeribitTickerZ = z.object({
+	result: z.object({
+		funding_8h: z.number(),
+	}),
+});
+
 const DeribitBookSummaryZ = z.object({
 	result: z.array(z.object({
 		instrument_name: z.string(),
@@ -352,14 +360,17 @@ export const fetchDeribitOptionsChain = async (
 	expiryTs?: number,
 ): Promise<MarketSnapshot> => {
 	const indexName = currency === "BTC" ? "btc_usd" : "eth_usd";
+	const perpName = `${currency}-PERPETUAL`;
 
-	const [indexRes, bookRes] = await Promise.all([
+	const [indexRes, bookRes, tickerRes] = await Promise.all([
 		axios.get(`${DERIBIT}/get_index_price?index_name=${indexName}`),
 		axios.get(`${DERIBIT}/get_book_summary_by_currency?currency=${currency}&kind=option`),
+		axios.get(`${DERIBIT}/ticker?instrument_name=${perpName}`),
 	]);
 
 	const spot = DeribitIndexZ.parse(indexRes.data).result.index_price;
 	const summaries = DeribitBookSummaryZ.parse(bookRes.data).result;
+	const funding8h = DeribitTickerZ.parse(tickerRes.data).result.funding_8h;
 
 	const calls: OptionQuote[] = [];
 	const puts: OptionQuote[] = [];
@@ -403,5 +414,5 @@ export const fetchDeribitOptionsChain = async (
 		else puts.push(quote);
 	}
 
-	return { ticker: currency, asOf: new Date(), spot, calls, puts };
+	return { ticker: currency, asOf: new Date(), spot, calls, puts, funding8h };
 };
