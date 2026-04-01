@@ -17,8 +17,8 @@
  * If both agree within statistical error, the model is internally consistent.
  */
 
-import { add, exp as qexp, multiply, scale, subtract } from "./quaternion.ts";
-import { price as bsPrice, type BSParams } from "./bs-model.ts";
+import { add, exp as qexp, multiply, scale, subtract } from "../quaternion/quaternion.ts";
+import { price as bsPrice, type BSParams } from "../bs-model/bs-model.ts";
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG (Mulberry32)

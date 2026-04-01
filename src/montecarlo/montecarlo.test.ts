@@ -7,7 +7,7 @@
  */
 
 import { assertAlmostEquals } from "@std/assert";
-import { type BSParams } from "./bs-model.ts";
+import { type BSParams } from "../bs-model/bs-model.ts";
 import { monteCarlo, mulberry32 } from "./montecarlo.ts";
 
 const SEED = 0xdeadbeef;

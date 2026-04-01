@@ -14,7 +14,7 @@
  *   deno run --allow-net --allow-env --allow-read --allow-write evaluate.ts
  */
 
-import { fetchDeribitSettlement, type DeribitCurrency } from "./market-data.ts";
+import { fetchDeribitSettlement, type DeribitCurrency } from "./collect-market-data.ts";
 import { loadPredictions, savePredictions, type Prediction } from "./predictions.ts";
 
 const predictions = await loadPredictions();

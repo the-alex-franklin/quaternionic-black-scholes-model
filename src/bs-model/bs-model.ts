@@ -34,7 +34,7 @@ import {
 	type Quaternion,
 	scale,
 	subtract,
-} from "./quaternion.ts";
+} from "../quaternion/quaternion.ts";
 
 // ---------------------------------------------------------------------------
 // Normal distribution helpers

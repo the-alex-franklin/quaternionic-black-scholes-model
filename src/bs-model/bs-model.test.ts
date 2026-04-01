@@ -5,7 +5,7 @@
 
 import { assertAlmostEquals, assertThrows } from "@std/assert";
 import { type BSParams, greeks, impliedVol, normalCDF, normalPDF, price, quatN } from "./bs-model.ts";
-import type { Quaternion } from "./quaternion.ts";
+import type { Quaternion } from "../quaternion/quaternion.ts";
 
 const near = (a: number, b: number, eps = 1e-6) => assertAlmostEquals(a, b, eps);
 

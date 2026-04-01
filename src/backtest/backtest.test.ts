@@ -18,14 +18,14 @@
  */
 
 import { assertAlmostEquals } from "@std/assert";
-import { price as bsPrice } from "./bs-model.ts";
+import { price as bsPrice } from "../bs-model/bs-model.ts";
 import {
 	extractQuatSpot,
 	fitQuatVol,
 	runBacktest,
 } from "./backtest.ts";
-import { historicalVol } from "./market-data.ts";
-import type { MarketSnapshot, OHLCV, OptionQuote } from "./market-data.ts";
+import { historicalVol } from "../../scripts/collect-market-data.ts";
+import type { MarketSnapshot, OHLCV, OptionQuote } from "../../scripts/collect-market-data.ts";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers

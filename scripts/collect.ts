@@ -14,10 +14,10 @@
  *   deno run --allow-net --allow-env --allow-read --allow-write collect.ts BTC ETH
  */
 
-import { fetchDeribitOptionsChain } from "./market-data.ts";
-import { fitQuatVol, extractQuatSpot, liquidQuotes } from "./backtest.ts";
-import { price as bsPrice, normalCDF, quatN, type BSParams } from "./bs-model.ts";
-import type { Quaternion } from "./quaternion.ts";
+import { fetchDeribitOptionsChain } from "./collect-market-data.ts";
+import { fitQuatVol, extractQuatSpot, liquidQuotes } from "../src/backtest/backtest.ts";
+import { price as bsPrice, normalCDF, quatN, type BSParams } from "../src/bs-model/bs-model.ts";
+import type { Quaternion } from "../src/quaternion/quaternion.ts";
 import { appendPredictions, type Prediction } from "./predictions.ts";
 
 const RISK_FREE_RATE = 0.0525;

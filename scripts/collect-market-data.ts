@@ -12,7 +12,7 @@
 
 import axios from "axios";
 import { z } from "zod";
-import { env } from "./env.ts";
+import { env } from "../src/env.ts";
 
 const apiKey = () => env.POLYGON_API_KEY;
 const BASE = "https://api.polygon.io";
@@ -119,7 +119,7 @@ const fetchSpot = async (ticker: string): Promise<number> => {
 // the impliedVol() inverter in bs-model.ts.
 // ---------------------------------------------------------------------------
 
-import { impliedVol } from "./bs-model.ts";
+import { impliedVol } from "../src/bs-model/bs-model.ts";
 
 const PolygonContractZ = z.object({
 	ticker: z.string(),
