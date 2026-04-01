@@ -91,7 +91,7 @@ const timeToExpiry = (asOf: Date, expiry: Date): number =>
 // ---------------------------------------------------------------------------
 
 /** Filter options that are liquid enough to trust */
-const liquidQuotes = (quotes: OptionQuote[]): OptionQuote[] =>
+export const liquidQuotes = (quotes: OptionQuote[]): OptionQuote[] =>
 	quotes.filter((q) =>
 		q.bid > 0 &&
 		q.ask > 0 &&
@@ -137,7 +137,22 @@ export const fitQuatVol = (
 	);
 	const { slope: volF } = ols(tsPoints.map(([t]) => t), tsPoints.map(([, iv]) => iv));
 
-	const vol: Quaternion = { t: volT, p: volP, f: volF, l: volL };
+	// Cap imaginary components: |v(vol)| ≤ MAX_IMAG_VOL_RATIO * vol.t
+	// Prevents imaginary squares from reducing the Itô drift enough to depress
+	// option prices across the board (vol².t = vol.t² − vol.p² − vol.f² − vol.l²).
+	const MAX_IMAG_VOL_RATIO = 0.20;
+	const imagNorm = Math.sqrt(volP ** 2 + volF ** 2 + volL ** 2);
+	const capFactor =
+		imagNorm > MAX_IMAG_VOL_RATIO * volT
+			? (MAX_IMAG_VOL_RATIO * volT) / imagNorm
+			: 1;
+
+	const vol: Quaternion = {
+		t: volT,
+		p: volP * capFactor,
+		f: volF * capFactor,
+		l: volL * capFactor,
+	};
 	return { vol, atm: volT };
 };
 

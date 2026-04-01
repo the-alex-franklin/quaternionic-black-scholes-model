@@ -303,6 +303,12 @@ const DeribitIndexZ = z.object({
 	result: z.object({ index_price: z.number() }),
 });
 
+const DeribitDeliveryZ = z.object({
+	result: z.object({
+		data: z.array(z.object({ date: z.string(), delivery_price: z.number() })),
+	}),
+});
+
 const DeribitTickerZ = z.object({
 	result: z.object({
 		funding_8h: z.number(),
@@ -415,4 +421,22 @@ export const fetchDeribitOptionsChain = async (
 	}
 
 	return { ticker: currency, asOf: new Date(), spot, calls, puts, funding8h };
+};
+
+/**
+ * Fetch Deribit's historical settlement (delivery) price for a given currency
+ * and date string ("YYYY-MM-DD"). Returns null if the date is not yet settled
+ * or not found in the last 100 weekly expiries.
+ */
+export const fetchDeribitSettlement = async (
+	currency: DeribitCurrency,
+	date: string,
+): Promise<number | null> => {
+	const indexName = currency === "BTC" ? "btc_usd" : "eth_usd";
+	const res = await axios.get(
+		`${DERIBIT}/get_delivery_prices?index_name=${indexName}&count=100`,
+	);
+	const { data } = DeribitDeliveryZ.parse(res.data).result;
+	const record = data.find((d) => d.date === date);
+	return record?.delivery_price ?? null;
 };
