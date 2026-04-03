@@ -10,10 +10,10 @@
  * Four market-observable quantities map cleanly to the four quaternion
  * dimensions of vol and spot:
  *
- *   vol.t   — ATM implied vol (DFT DC mode)
- *   vol.p   — skew: dIV/d(log-moneyness) at ATM (DFT first-mode derivative)
+ *   vol.t   — ATM implied vol (quadratic OLS intercept at m=0)
+ *   vol.p   — skew: dIV/d(log-moneyness) at ATM (quadratic OLS linear term)
  *   vol.f   — term structure: OLS slope of mean-IV vs √T
- *   vol.l   — curvature: d²IV/d(log-moneyness)² at ATM (DFT second-mode)
+ *   vol.l   — curvature: d²IV/d(log-moneyness)² at ATM (2× quadratic OLS term)
  *
  *   spot.t  — market price of the underlying
  *   spot.p  — perpetual funding rate cost: funding_8h × spot (dollars)
@@ -28,7 +28,6 @@
 import { type OptionQuote, type MarketSnapshot } from "../../scripts/collect-market-data.ts";
 import { impliedVol as bsImpliedVol, price as bsPrice, type BSParams } from "../bs-model/bs-model.ts";
 import type { Quaternion } from "../quaternion/quaternion.ts";
-import { extractVolCurve } from "../fft/fft.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,10 +50,10 @@ export type BacktestResult = {
 	asOf: Date;
 	spot: number;
 	rate: number;
-	volT: number;                 // ATM implied vol (vol.t) — DFT DC mode
-	volP: number;                 // skew (vol.p) — DFT first-mode derivative
+	volT: number;                 // ATM implied vol (vol.t)
+	volP: number;                 // skew (vol.p)
 	volF: number;                 // term structure (vol.f) — OLS vs √T
-	volL: number;                 // curvature (vol.l) — DFT second-mode
+	volL: number;                 // curvature (vol.l)
 	spotP: number;                // funding pressure: funding_8h × spot (spot.p)
 	comparisons: PricingComparison[];
 	classicalRMSE: number;
@@ -77,6 +76,50 @@ const ols = (xs: number[], ys: number[]): { slope: number; intercept: number } =
 	const den = xs.reduce((s, x) => s + (x - mx) ** 2, 0);
 	const slope = den === 0 ? 0 : num / den;
 	return { slope, intercept: my - slope * mx };
+};
+
+/**
+ * Fit IV(m) = a + b·m + c·m² via quadratic OLS (m = log-moneyness).
+ *
+ *   volT = a   — ATM implied vol (value at m = 0)
+ *   volP = b   — skew slope at ATM (first derivative)
+ *   volL = 2c  — smile curvature at ATM (second derivative)
+ */
+const fitVolCurve = (
+	moneyness: number[],
+	ivs: number[],
+): { volT: number; volP: number; volL: number } => {
+	const mean = ivs.reduce((s, v) => s + v, 0) / (ivs.length || 1);
+	const fallback = { volT: mean, volP: 0, volL: 0 };
+	if (moneyness.length < 3) return fallback;
+
+	// Accumulate sums for the 3×3 normal equations: Σ[1, m, m²]ᵀ[1, m, m²] a = Σ[1, m, m²]ᵀ iv
+	let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+	let y0 = 0, y1 = 0, y2 = 0;
+	for (let i = 0; i < moneyness.length; i++) {
+		const m = moneyness[i]!, iv = ivs[i]!;
+		const m2 = m * m;
+		s0 += 1; s1 += m; s2 += m2; s3 += m2 * m; s4 += m2 * m2;
+		y0 += iv; y1 += m * iv; y2 += m2 * iv;
+	}
+
+	// Cramer's rule for the 3×3 system
+	const det3 = (r: number[][]): number =>
+		r[0]![0]! * (r[1]![1]! * r[2]![2]! - r[1]![2]! * r[2]![1]!) -
+		r[0]![1]! * (r[1]![0]! * r[2]![2]! - r[1]![2]! * r[2]![0]!) +
+		r[0]![2]! * (r[1]![0]! * r[2]![1]! - r[1]![1]! * r[2]![0]!);
+
+	const A = [[s0, s1, s2], [s1, s2, s3], [s2, s3, s4]];
+	const D = det3(A);
+	if (Math.abs(D) < 1e-12) return fallback;
+
+	const rhs = [y0, y1, y2];
+	const cramer = (col: number): number =>
+		det3(A.map((row, i) => row.map((v, j) => (j === col ? rhs[i]! : v)))) / D;
+
+	const a = cramer(0), b = cramer(1), c = cramer(2);
+	if (!isFinite(a) || !isFinite(b) || !isFinite(c)) return fallback;
+	return { volT: Math.max(0.01, a), volP: b, volL: 2 * c };
 };
 
 const rmse = (errors: number[]): number =>
@@ -104,14 +147,13 @@ export const liquidQuotes = (quotes: OptionQuote[]): OptionQuote[] =>
 /**
  * Fit quaternionic vol from the options surface.
  *
- *   vol.t — smoothed ATM implied vol (DFT DC mode at log-moneyness = 0)
- *   vol.p — skew: dIV/d(log-moneyness) at ATM (DFT first-mode derivative)
+ *   vol.t — ATM implied vol (quadratic OLS intercept at log-moneyness = 0)
+ *   vol.p — skew: dIV/d(log-moneyness) at ATM (quadratic OLS linear term)
  *   vol.f — term-structure slope: OLS of mean-IV vs √T across expiries
- *   vol.l — smile curvature: d²IV/d(log-moneyness)² at ATM (DFT second-mode)
+ *   vol.l — smile curvature: d²IV/d(log-moneyness)² at ATM (2× quadratic term)
  *
- * vol.t/p/l are extracted via DFT-based low-pass filtering of the IV curve,
- * which separates the smooth smile signal from noise in illiquid/stale quotes.
- * vol.f is kept on OLS since it operates along a separate axis (√T).
+ * vol.t/p/l are extracted by fitting IV(m) = a + b·m + c·m² via OLS.
+ * vol.f uses linear OLS since it operates along a separate axis (√T).
  */
 export const fitQuatVol = (
 	snapshot: MarketSnapshot,
@@ -120,10 +162,10 @@ export const fitQuatVol = (
 	const allQuotes = liquidQuotes([...snapshot.calls, ...snapshot.puts]);
 	const S = snapshot.spot;
 
-	// vol.t, vol.p, vol.l — DFT of IV vs log-moneyness
+	// vol.t, vol.p, vol.l — quadratic OLS on IV vs log-moneyness
 	const moneyness = allQuotes.map((q) => Math.log(q.strike / S));
 	const ivs = allQuotes.map((q) => q.iv);
-	const { volT, volP, volL } = extractVolCurve(moneyness, ivs);
+	const { volT, volP, volL } = fitVolCurve(moneyness, ivs);
 
 	// vol.f — OLS of mean IV vs √T across expiry groups
 	const expiryGroups = new Map<number, number[]>();

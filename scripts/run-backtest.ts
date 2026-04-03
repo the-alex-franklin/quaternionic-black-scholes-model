@@ -1,10 +1,7 @@
 /**
  * run-backtest.ts
  *
- * Fetches live options chains and runs the quaternionic vs classical BS backtest.
- *
- * Crypto (BTC, ETH): Deribit public API — no key needed.
- * Equities (SPY, SPX, AAPL): Polygon.io — requires POLYGON_API_KEY env var.
+ * Fetches live Deribit options chains and runs the quaternionic vs classical BS backtest.
  *
  * Usage:
  *   deno run --allow-net --allow-env --allow-read run-backtest.ts
@@ -12,12 +9,10 @@
  *   deno run --allow-net --allow-env --allow-read run-backtest.ts ETH BTC
  */
 
-import { fetchDeribitOptionsChain, fetchOptionsChain } from "./collect-market-data.ts";
+import { fetchDeribitOptionsChain } from "./collect-market-data.ts";
 import { runBacktest } from "../src/backtest/backtest.ts";
 
-const CRYPTO_RATE = 0.0525;
-const EQUITY_RATE = 0.0525;
-const DERIBIT_TICKERS = new Set(["BTC", "ETH"]);
+const RATE = 0.0525;
 
 const args = Deno.args.length > 0 ? Deno.args : ["BTC", "ETH"];
 
@@ -27,12 +22,8 @@ for (const ticker of args) {
 	console.log(`${"─".repeat(60)}`);
 
 	try {
-		const isCrypto = DERIBIT_TICKERS.has(ticker.toUpperCase());
-		const snapshot = isCrypto
-			? await fetchDeribitOptionsChain(ticker.toUpperCase() as "BTC" | "ETH")
-			: await fetchOptionsChain(ticker);
-		const rate = isCrypto ? CRYPTO_RATE : EQUITY_RATE;
-		const result = runBacktest(snapshot, rate);
+		const snapshot = await fetchDeribitOptionsChain(ticker.toUpperCase() as "BTC" | "ETH");
+		const result = runBacktest(snapshot, RATE);
 
 		const pct = (x: number) => (x * 100).toFixed(4) + "%";
 		const usd = (x: number) => "$" + x.toFixed(4);
