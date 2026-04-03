@@ -15,7 +15,7 @@
  */
 
 import { fetchDeribitSettlement, type DeribitCurrency } from "../src/deribit/deribit.ts";
-import { loadPredictions, savePredictions, type Prediction } from "./predictions.ts";
+import { loadPredictions, savePredictions, type Prediction } from "../src/predictions.ts";
 
 const predictions = await loadPredictions();
 const now = Date.now() / 1000;

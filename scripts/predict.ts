@@ -11,14 +11,14 @@
  * a time series. evaluate.ts resolves outcomes after settlement.
  *
  * Usage:
- *   deno run --allow-net --allow-env --allow-read --allow-write collect.ts BTC ETH
+ *   deno run --allow-net --allow-env --allow-read --allow-write predict.ts BTC ETH
  */
 
 import { fetchDeribitOptionsChain } from "../src/deribit/deribit.ts";
 import { fitQuatVol, extractQuatSpot, liquidQuotes } from "../src/backtest/backtest.ts";
 import { price as bsPrice, normalCDF, quatN, type BSParams } from "../src/bs-model/bs-model.ts";
 import type { Quaternion } from "../src/quaternion/quaternion.ts";
-import { appendPredictions, type Prediction } from "./predictions.ts";
+import { appendPredictions, type Prediction } from "../src/predictions.ts";
 
 const RISK_FREE_RATE = 0.0525;
 const MIN_DTE = 7;
