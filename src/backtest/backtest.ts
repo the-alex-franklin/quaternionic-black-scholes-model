@@ -25,7 +25,7 @@
  * captures cross-market effects that classical flat-vol BS ignores.
  */
 
-import { type OptionQuote, type MarketSnapshot } from "../../scripts/collect-market-data.ts";
+import { type OptionQuote, type MarketSnapshot } from "../deribit/deribit.ts";
 import { impliedVol as bsImpliedVol, price as bsPrice, type BSParams } from "../bs-model/bs-model.ts";
 import type { Quaternion } from "../quaternion/quaternion.ts";
 

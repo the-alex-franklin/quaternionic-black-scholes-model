@@ -1,8 +1,8 @@
 /**
- * Market Data Layer — Deribit
+ * Deribit API
  *
- * Deribit: live BTC/ETH options chains. No API key needed — all public endpoints.
- *   Use fetchDeribitOptionsChain() to get a MarketSnapshot ready for runBacktest().
+ * Live BTC/ETH options chains. No API key needed — all public endpoints.
+ * Use fetchDeribitOptionsChain() to get a MarketSnapshot ready for runBacktest().
  *
  * Tests use fixture snapshots and do not call these functions directly.
  */

@@ -24,7 +24,7 @@ import {
 	fitQuatVol,
 	runBacktest,
 } from "./backtest.ts";
-import type { MarketSnapshot, OptionQuote } from "../../scripts/collect-market-data.ts";
+import type { MarketSnapshot, OptionQuote } from "../deribit/deribit.ts";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers

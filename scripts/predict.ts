@@ -1,5 +1,5 @@
 /**
- * collect.ts — Snapshot predictions to disk
+ * predict.ts — Snapshot predictions to disk
  *
  * For each ticker, fetches a live options snapshot, calibrates the quaternionic
  * model, then for every liquid option at the nearest expiry (>= 7 DTE) records:
@@ -14,7 +14,7 @@
  *   deno run --allow-net --allow-env --allow-read --allow-write collect.ts BTC ETH
  */
 
-import { fetchDeribitOptionsChain } from "./collect-market-data.ts";
+import { fetchDeribitOptionsChain } from "../src/deribit/deribit.ts";
 import { fitQuatVol, extractQuatSpot, liquidQuotes } from "../src/backtest/backtest.ts";
 import { price as bsPrice, normalCDF, quatN, type BSParams } from "../src/bs-model/bs-model.ts";
 import type { Quaternion } from "../src/quaternion/quaternion.ts";

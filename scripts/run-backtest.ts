@@ -9,7 +9,7 @@
  *   deno run --allow-net --allow-env --allow-read run-backtest.ts ETH BTC
  */
 
-import { fetchDeribitOptionsChain } from "./collect-market-data.ts";
+import { fetchDeribitOptionsChain } from "../src/deribit/deribit.ts";
 import { runBacktest } from "../src/backtest/backtest.ts";
 
 const RATE = 0.0525;
