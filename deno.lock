@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@2or3godzillas/fp-try@^1.2.0": "1.4.0",
     "jsr:@std/assert@*": "1.0.11",
     "jsr:@std/dotenv@*": "0.225.6",
     "jsr:@std/internal@^1.0.5": "1.0.5",
@@ -8,6 +9,9 @@
     "npm:zod@*": "4.3.6"
   },
   "jsr": {
+    "@2or3godzillas/fp-try@1.4.0": {
+      "integrity": "ee205f08b26fdb4bf9ede723ab1bf036907ac8002f6c7d000b344ca91847dd75"
+    },
     "@std/assert@1.0.11": {
       "integrity": "2461ef3c368fe88bc60e186e7744a93112f16fd110022e113a0849e94d1c83c1",
       "dependencies": [
