@@ -1,4 +1,4 @@
-import { impliedVol, price, type BSParams } from "../src/bs-model/bs-model.ts";
+import { impliedVol, normalCDF, price, type BSParams } from "../src/bs-model/bs-model.ts";
 
 type Row = {
 	date: string;
@@ -18,11 +18,26 @@ type BacktestRow = {
 	fundingRate: number | null;
 	strike: number;
 	classicalPrice: number;
+	carryPrice: number | null;
 	quatPrice: number | null;
 	realizedPayoff: number;
 	breakevenVol: number | null;
 	classicalError: number;
+	carryError: number | null;
 	quatError: number | null;
+};
+
+/**
+ * Merton (1973) call price with continuous dividend yield q.
+ * Funding rate enters as a carry cost: longs pay q to hold the perpetual,
+ * so the forward is F = S·exp((r−q)·T). When q > 0 (bull market funding),
+ * the forward and thus the call are cheaper than vanilla BS.
+ */
+const carryCall = (S: number, K: number, T: number, r: number, sigma: number, q: number): number => {
+	const sqrtT = Math.sqrt(T);
+	const d1 = (Math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T) / (sigma * sqrtT);
+	const d2 = d1 - sigma * sqrtT;
+	return S * Math.exp(-q * T) * normalCDF(d1) - K * Math.exp(-r * T) * normalCDF(d2);
 };
 
 const WINDOW = 30;
@@ -61,8 +76,13 @@ for (let i = WINDOW; i < rows.length - HORIZON; i++) {
 	};
 	const classicalPrice = price(classicalParams).call.t;
 
+	let carryPrice: number | null = null;
 	let quatPrice: number | null = null;
 	if (row.fundingRate !== null) {
+		// OKX settles funding 3× per day; annualize to a continuous yield
+		const q = row.fundingRate * 3 * 365;
+		carryPrice = carryCall(row.close, strike, T, RATE, sigma, q);
+
 		const annualizedFunding = row.fundingRate * 365;
 		const quatParams: BSParams = {
 			spot: { t: row.close, p: momentum, f: annualizedFunding * row.close, l: 0 },
@@ -89,10 +109,12 @@ for (let i = WINDOW; i < rows.length - HORIZON; i++) {
 		fundingRate: row.fundingRate,
 		strike,
 		classicalPrice,
+		carryPrice,
 		quatPrice,
 		realizedPayoff,
 		breakevenVol,
 		classicalError: classicalPrice - realizedPayoff,
+		carryError: carryPrice !== null ? carryPrice - realizedPayoff : null,
 		quatError: quatPrice !== null ? quatPrice - realizedPayoff : null,
 	});
 }
@@ -110,9 +132,9 @@ const fmt = (n: number | null, d = 2, w = 9) =>
 
 console.log(`\nBacktest: ${results.length} ATM ${HORIZON}-day calls on BTC/USDT\n`);
 console.log(
-	"Date        Close     RealVol   Classical  Quat      Realized   BEVol     CErr      QErr",
+	"Date        Close     RealVol   Classical  Carry     Quat      Realized   BEVol     CErr      CarryErr  QErr",
 );
-console.log("-".repeat(95));
+console.log("-".repeat(110));
 
 for (const r of results) {
 	console.log(
@@ -120,10 +142,12 @@ for (const r of results) {
 			`${pad(r.close.toFixed(0), 8)}  ` +
 			`${pad((r.realizedVol * 100).toFixed(1) + "%", 7)}   ` +
 			`${fmt(r.classicalPrice)}  ` +
+			`${fmt(r.carryPrice)}  ` +
 			`${fmt(r.quatPrice)}  ` +
 			`${fmt(r.realizedPayoff)}  ` +
 			`${r.breakevenVol !== null ? pad((r.breakevenVol * 100).toFixed(1) + "%", 7) : pad("-", 7)}  ` +
 			`${fmt(r.classicalError)}  ` +
+			`${fmt(r.carryError)}  ` +
 			`${fmt(r.quatError)}`,
 	);
 }
@@ -133,15 +157,36 @@ const mae = (xs: number[]) => mean(xs.map(Math.abs));
 const rmse = (xs: number[]) => Math.sqrt(mean(xs.map((x) => x * x)));
 
 const cErrs = results.map((r) => r.classicalError);
+const carryErrs = results.flatMap((r) => r.carryError !== null ? [r.carryError] : []);
 const qErrs = results.flatMap((r) => r.quatError !== null ? [r.quatError] : []);
+// Classical errors restricted to the rows where funding data exists (fair comparison)
+const cErrsOnFundingRows = results.flatMap((r) =>
+	r.fundingRate !== null ? [r.classicalError] : []
+);
 
-console.log("\nSummary:");
+console.log("\nSummary (all rows):");
 console.log(
 	`  Classical    n=${cErrs.length.toString().padEnd(3)}  ` +
 		`MAE=${mae(cErrs).toFixed(2).padStart(8)}  ` +
 		`RMSE=${rmse(cErrs).toFixed(2).padStart(8)}  ` +
 		`Bias=${mean(cErrs).toFixed(2).padStart(8)}`,
 );
+
+console.log("\nSummary (funding-data rows only — apples-to-apples):");
+console.log(
+	`  Classical    n=${cErrsOnFundingRows.length.toString().padEnd(3)}  ` +
+		`MAE=${mae(cErrsOnFundingRows).toFixed(2).padStart(8)}  ` +
+		`RMSE=${rmse(cErrsOnFundingRows).toFixed(2).padStart(8)}  ` +
+		`Bias=${mean(cErrsOnFundingRows).toFixed(2).padStart(8)}`,
+);
+if (carryErrs.length > 0) {
+	console.log(
+		`  Carry-adj    n=${carryErrs.length.toString().padEnd(3)}  ` +
+			`MAE=${mae(carryErrs).toFixed(2).padStart(8)}  ` +
+			`RMSE=${rmse(carryErrs).toFixed(2).padStart(8)}  ` +
+			`Bias=${mean(carryErrs).toFixed(2).padStart(8)}`,
+	);
+}
 if (qErrs.length > 0) {
 	console.log(
 		`  Quaternionic n=${qErrs.length.toString().padEnd(3)}  ` +
